@@ -10,7 +10,12 @@ ebin
 *.la
 *.conf
 playdar_modules/library/priv/taglib_driver/taglib_json_reader
+playdar_modules/library/priv/taglib_driver/taglib_json_reader.exe
+playdar_modules/library/priv/taglib_driver/tag.dll
 erl_crash.dump
 *.ncb
 *.suo
 *.vcproj.*.user
+*.db
+playdar.err
+playdar.log

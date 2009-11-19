@@ -64,14 +64,30 @@ loop1(Req, DocRoot) ->
             render(Req, DocRoot ++ "/index.html", Vars);
         
         % serving a file that was found by a query, based on SID:
-        "sid/" ++ SidL ->
+        "sid/" ++ TrackL -> 
+            Qs = Req:parse_qs(),
+            SidL = proplists:get_value("sid", Qs, TrackL),
+%%        "sid/" ++ SidL ->
             Sid = list_to_binary(SidL),
             case playdar_resolver:result(Sid) of
                 undefined ->
                     Req:not_found();
                 A ->
                     Ref = make_ref(),
-                    case playdar_reader_registry:get_streamer(A, self(), Ref) of
+                    Streamer = case Req:get(range) of
+                        [{Begin, RangeEnd}] ->
+                            End = case RangeEnd of
+                                none ->
+                                    {struct, B} = A,
+                                    proplists:get_value(<<"size">>, B, 1) - 1;
+                                Y -> Y
+                            end,
+                            Len = End - Begin + 1,
+                            playdar_reader_registry:get_streamer(A, Begin, Len, self(), Ref);
+                        _ ->
+                            playdar_reader_registry:get_streamer(A, self(), Ref)
+                    end,
+                    case Streamer of
                         undefined ->
                             Req:respond({503, [], <<"Playdar server error: no such protocol handler">>});
                         Sfun -> 
@@ -228,18 +244,45 @@ stream_result(Req, Ref) ->
     receive
         {Ref, headers, Headers0} ->
             {Mimetype0, Headers} = get_option("content-type", Headers0),
+            Size = proplists:get_value("content-length", Headers, 0),
             Mimetype = case Mimetype0 of 
                 undefined -> "binary/unspecified";
                 X when is_list(X) -> X
             end,
-            Resp = Req:ok( { Mimetype, [{"Server", "Playdar"}|Headers], chunked } ),
+            HResponse = mochiweb_headers:make(Headers),
+            case Req:get(range) of
+                [{Begin, RangeEnd}] when Size > 0 ->
+                    End = case RangeEnd of
+                        none ->
+                            Size - 1;
+                        Y -> Y
+                    end,
+                    %% return body for a range reponse with a single body
+                    HeaderList = [{"Content-Type", Mimetype},
+                                  {"Content-Length", End - Begin + 1},
+                                  {"Content-Range",
+                                  ["bytes ",
+                                   integer_to_list(Begin), "-", integer_to_list(End),
+                                   "/", integer_to_list(Size)]}],
+                    HResponse1 = mochiweb_headers:enter_from_list(
+                                   [{"Accept-Ranges", "bytes"} |
+                                    HeaderList],
+                                   HResponse),
+                    Code = 206;
+                _ ->
+                    HResponse1 = mochiweb_headers:enter("Content-Type", Mimetype, HResponse),
+                    Code = 200
+            end,
+            Resp = Req:respond({Code, HResponse1, chunked}),
+            %Resp = Req:ok( { Mimetype, [{"Server", "Playdar"}|Headers], chunked } ),
             %io:format("Headers sent~n",[]),
             stream_result_body(Req, Resp, Ref)
             
         after 12000 ->
             Req:ok({"text/plain", [{"Server", "Playdar"}], "Timeout on headers/initialising stream"})
     end.
-    
+
+
 stream_result_body(Req, Resp, Ref) ->
     receive
         {Ref, data, Data} ->

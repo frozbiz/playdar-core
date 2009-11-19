@@ -8,7 +8,7 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/0, get_streamer/3, register_handler/2, get_all/0]).
+-export([start_link/0, get_streamer/3, get_streamer/5, register_handler/2, get_all/0]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -22,6 +22,9 @@ start_link() ->
 % gets a functor that will start the streaming to the given Pid
 get_streamer({struct, A}, Pid, Ref) when is_list(A), is_pid(Pid) ->
     gen_server:call(?MODULE, {get_streamer, A, Pid, Ref}).
+
+get_streamer({struct, A}, Begin, Len, Pid, Ref) when is_list(A), is_pid(Pid) ->
+    gen_server:call(?MODULE, {get_streamer, A, Begin, Len, Pid, Ref}).
 
 % all protocol names handled
 get_all() -> gen_server:call(?MODULE, all).
@@ -46,6 +49,21 @@ handle_call({get_streamer, A, Pid, Ref}, _From, State) ->
             case ets:lookup(State#state.db, Proto) of
                 [{_,Fun}] ->  
                     F = fun() -> (Fun)({struct, A}, Pid, Ref) end,
+                    {reply, F, State};
+                _ ->
+                    ?LOG(warning, "No stream handler registed for '~s'", [Proto]),
+                    {reply, undefined, State}
+            end
+    end;
+
+handle_call({get_streamer, A, Begin, Len, Pid, Ref}, _From, State) ->
+    case proplists:get_value(<<"url">>, A) of
+        UrlB when is_binary(UrlB) -> 
+            Url = binary_to_list(UrlB),
+            [Proto|_Rest] = string:tokens(Url, ":"),
+            case ets:lookup(State#state.db, Proto) of
+                [{_,Fun}] ->  
+                    F = fun() -> (Fun)({struct, A}, Begin, Len, Pid, Ref) end,
                     {reply, F, State};
                 _ ->
                     ?LOG(warning, "No stream handler registed for '~s'", [Proto]),
